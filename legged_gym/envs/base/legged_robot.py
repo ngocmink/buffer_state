@@ -128,6 +128,12 @@ class LeggedRobot(BaseTask):
         self.reset_idx(env_ids)
         self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
 
+        self.extras["full_states"] = torch.cat([
+            self.root_states[:, :13],          # pos(3) + quat(4) + lin_vel(3) + ang_vel(3)
+            self.dof_pos,                       # [num_envs, num_dof]
+            self.dof_vel,                       # [num_envs, num_dof]
+        ], dim=-1)   
+        
         self.last_actions[:] = self.actions[:]
         self.last_dof_vel[:] = self.dof_vel[:]
         self.last_root_vel[:] = self.root_states[:, 7:13]
@@ -165,16 +171,18 @@ class LeggedRobot(BaseTask):
             self.update_command_curriculum(env_ids)
 
         if hasattr(self, 'external_initial_states'):
-            selected_states = self.external_initial_states[env_ids]
+            selected_states = self.external_initial_states[env_ids]    # [len(env_ids), state_dim]
             
             # Cập nhật root states (vị trí + hướng)
-            self.root_states[env_ids] = selected_states[:, :13] 
+            self.root_states[env_ids] = selected_states[:, :13]     # pos(3) + quat(4) + lin_vel(3) + ang_vel(3)
 
             self.root_states[env_ids, :2] += self.env_origins[env_ids, :2]
 
-            new_x_y = self.root_states[env_ids, :2]
-            new_ground_height = self.env.terrain.get_heights(new_x_y)
-            self.root_states[env_ids, 2] = new_ground_height + selected_states[:, 2]
+            if self.cfg.terrain.measure_heights:
+                heights = self._get_heights(env_ids)
+                ground_height = torch.mean(heights, dim=1)
+                self.root_states[env_ids, 2] = ground_height + selected_states[:, 2]
+
             # Cập nhật DOF states (góc khớp + vận tốc khớp)
             self.dof_pos[env_ids] = selected_states[:, 13:13+self.num_dof]
             self.dof_vel[env_ids] = selected_states[:, 13+self.num_dof:]
@@ -186,12 +194,11 @@ class LeggedRobot(BaseTask):
         env_ids_int32 = env_ids.to(dtype=torch.int32)
         
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
-                                                     gymapi.make_gpu_tensor_view(self.root_states),
-                                                     gymapi.make_gpu_tensor_view(env_ids_int32), len(env_ids_int32))
-        
+                                                     gymtorch.unwrap_tensor(self.root_states),
+                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
         self.gym.set_dof_state_tensor_indexed(self.sim,
-                                              gymapi.make_gpu_tensor_view(self.dof_state),
-                                              gymapi.make_gpu_tensor_view(env_ids_int32), len(env_ids_int32))
+                                                     gymtorch.unwrap_tensor(self.dof_state),
+                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
 
         self._resample_commands(env_ids)
 
