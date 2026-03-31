@@ -211,9 +211,18 @@ class OnPolicyRunner:
         tot_iter = start_iter + num_learning_iterations
         for it in range(start_iter, tot_iter):
             start = time.time()
+
+            state_dim = 13 + self.env.num_dof * 2
+            full_states_buffer = torch.zeros(
+                self.num_steps_per_env, 
+                self.env.num_envs, 
+                state_dim, 
+                device=self.device
+            )
+
             # Rollout
             with torch.inference_mode():
-                for _ in range(self.num_steps_per_env):
+                for step in range(self.num_steps_per_env):
                     # Sample actions
                     actions = self.alg.act(obs, privileged_obs)
                     # Step the environment
@@ -228,6 +237,8 @@ class OnPolicyRunner:
                         )
                     else:
                         privileged_obs = obs
+
+                    full_states_buffer[step] = infos["full_states"].to(self.device)
 
                     # process the step
                     self.alg.process_env_step(rewards, dones, infos)
@@ -271,28 +282,27 @@ class OnPolicyRunner:
                 self.projection_buffer.create_train_data(
                     rollout_rewards=storage.rewards.cpu().numpy(),           # [steps, envs]
                     rollout_observations=storage.observations.cpu().numpy(), # [steps, envs, dim]
-                    rollout_episode_starts=storage.dones.cpu().numpy()       # [steps, envs]
+                    rollout_episode_starts=storage.dones.cpu().numpy(),       # [steps, envs]
+                    rollout_full_states=storage.full_states_buffer.cpu().numpy()
                 )
                 with torch.no_grad():
                     sample_obs = self.projection_buffer.get_train_sample_observs()
-                    values = self.alg.actor_critic.evaluate(sample_obs).cpu().numpy().flatten()
+                    values = self.alg.policy.evaluate(sample_obs).cpu().numpy().flatten()
                     
-                # Train
-                loss_dict = {}
-                proj_loss = self.projection_buffer.train_step(values)
-                loss_dict["projection_loss"] = proj_loss
-
+                # compute returns
+                if self.training_type == "rl":
+                    self.alg.compute_returns(privileged_obs)
+                
                 stop = time.time()
                 collection_time = stop - start
                 start = stop
 
-                # compute returns
-                if self.training_type == "rl":
-                    self.alg.compute_returns(privileged_obs)
+            proj_loss = self.projection_buffer.train_step(values)
 
             # update policy
             loss_dict = self.alg.update()
-                        
+            loss_dict["projection_loss"] = proj_loss.item()
+            
             raw_obs = self.projection_buffer.train_data['observs'][:, 0, :].cpu().numpy() # [envs, dim]
             flattened_obs = raw_obs.reshape(-1, self.env.num_obs)
 
