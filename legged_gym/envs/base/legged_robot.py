@@ -149,7 +149,7 @@ class LeggedRobot(BaseTask):
         self.reset_buf |= self.time_out_buf
 
     def set_external_initial_states(self, states):
-        self.external_initial_states = states # states: [pos, quat, lin_vel, ang_vel, dof_pos, dof_vel]
+        self.external_initial_states = states.float() # states: [pos, quat, lin_vel, ang_vel, dof_pos, dof_vel]
 
     def reset_idx(self, env_ids):
         """ Reset some environments.
@@ -171,8 +171,8 @@ class LeggedRobot(BaseTask):
             self.update_command_curriculum(env_ids)
 
         if hasattr(self, 'external_initial_states'):
-            selected_states = self.external_initial_states[env_ids]    # [len(env_ids), state_dim]
-            
+            selected_states = self.external_initial_states[env_ids]   # [len(env_ids), state_dim]
+
             # Cập nhật root states (vị trí + hướng)
             self.root_states[env_ids] = selected_states[:, :13]     # pos(3) + quat(4) + lin_vel(3) + ang_vel(3)
 

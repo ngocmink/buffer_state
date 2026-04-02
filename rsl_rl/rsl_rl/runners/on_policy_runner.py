@@ -32,6 +32,8 @@ import time
 import os
 from collections import deque
 import statistics
+import setuptools 
+import distutils.version
 
 from torch.utils.tensorboard import SummaryWriter
 import torch
@@ -55,13 +57,13 @@ class OnPolicyRunner:
         self.device = device
         self.env = env
 
-        from cl_initial_buffer.initial_buffer.algorithms.projection_buffer import ProjectionBuffer
+        from initial_buffer.algorithms.projection_buffer import ProjectionBuffer
 
         self.projection_buffer = ProjectionBuffer(
             device=device,
             nr_clusters=64,
             cluster_algo='kmeans',
-            obs_dim=env.observation_space.shape[0],
+            obs_dim=env.num_obs,
             advantage_gamma=self.alg_cfg.get("gamma", 0.99),
             gae_lambda=self.alg_cfg.get("gae_lambda", 0.95),
             sampling_strategy='network',
@@ -126,7 +128,7 @@ class OnPolicyRunner:
 
             # Rollout
             with torch.inference_mode():
-                for i in range(self.num_steps_per_env):
+                for step in range(self.num_steps_per_env):
                     actions = self.alg.act(obs, critic_obs)
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions)
                     critic_obs = privileged_obs if privileged_obs is not None else obs
@@ -151,11 +153,13 @@ class OnPolicyRunner:
                 
                 # Projection Buffer
                 storage = self.alg.storage
-    
+
+                rollout_rewards = storage.rewards.cpu().numpy().squeeze(-1)
+                rollout_episode_starts = storage.dones.cpu().numpy().squeeze(-1)
                 self.projection_buffer.create_train_data(
-                    rollout_rewards=storage.rewards.cpu().numpy(),           # [steps, envs]
+                    rollout_rewards=rollout_rewards,           # [steps, envs]
                     rollout_observations=storage.observations.cpu().numpy(), # [steps, envs, dim]
-                    rollout_episode_starts=storage.dones.cpu().numpy(),       # [steps, envs]
+                    rollout_episode_starts=rollout_episode_starts,       # [steps, envs]
                     rollout_full_states=full_states_buffer.cpu().numpy()
                 )
                 with torch.no_grad():
@@ -167,9 +171,10 @@ class OnPolicyRunner:
 
                 # Learning step
                 start = stop
-                self.alg.compute_returns(critic_obs)
+            self.alg.compute_returns(critic_obs.clone())
             
             proj_loss = self.projection_buffer.train_step(values)
+            self.writer.add_scalar('Loss/proj_loss', proj_loss, it)
 
             mean_value_loss, mean_surrogate_loss = self.alg.update()
 
