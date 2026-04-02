@@ -13,7 +13,7 @@ from rsl_rl.utils import resolve_nn_activation
 
 
 class RandomNetworkDistillation(nn.Module):
-    """Implementation of Random Network Distillation (RND) [1]
+    """Implementation of Random Network Distillation (RND) [1]_
 
     References:
         .. [1] Burda, Yuri, et al. "Exploration by random network distillation." arXiv preprint arXiv:1810.12894 (2018).
@@ -30,7 +30,8 @@ class RandomNetworkDistillation(nn.Module):
         state_normalization: bool = False,
         reward_normalization: bool = False,
         device: str = "cpu",
-        weight_schedule: dict | None = None,
+        weight_schedule: str | None = None,
+        **kwargs,
     ):
         """Initialize the RND module.
 
@@ -52,24 +53,13 @@ class RandomNetworkDistillation(nn.Module):
             state_normalization: Whether to normalize the input state. Defaults to False.
             reward_normalization: Whether to normalize the intrinsic reward. Defaults to False.
             device: Device to use. Defaults to "cpu".
-            weight_schedule: The type of schedule to use for the RND weight parameter.
+            weight_schedule: The type of schedule to use for the RND weight parameter. Must be one of ["constant", "step"].
                 Defaults to None, in which case the weight parameter is constant.
-                It is a dictionary with the following keys:
 
-                - "mode": The type of schedule to use for the RND weight parameter.
-                    - "constant": Constant weight schedule.
-                    - "step": Step weight schedule.
-                    - "linear": Linear weight schedule.
+        Keyword Args:
 
-                For the "step" weight schedule, the following parameters are required:
-
-                - "final_step": The step at which the weight parameter is set to the final value.
-                - "final_value": The final value of the weight parameter.
-
-                For the "linear" weight schedule, the following parameters are required:
-                - "initial_step": The step at which the weight parameter is set to the initial value.
-                - "final_step": The step at which the weight parameter is set to the final value.
-                - "final_value": The final value of the weight parameter.
+            max_num_steps (int): Maximum number of steps per episode. Used for the weight schedule of type "step".
+            final_value (float): Final value of the weight parameter. Used for the weight schedule of type "step".
         """
         # initialize parent class
         super().__init__()
@@ -84,7 +74,7 @@ class RandomNetworkDistillation(nn.Module):
 
         # Normalization of input gates
         if state_normalization:
-            self.state_normalizer = EmpiricalNormalization(shape=[self.num_states], until=1.0e8).to(self.device)
+            self.state_normalizer = EmpiricalNormalization(shape=[self.num_obs], until=1.0e8).to(self.device)
         else:
             self.state_normalizer = torch.nn.Identity()
         # Normalization of intrinsic reward
@@ -106,17 +96,14 @@ class RandomNetworkDistillation(nn.Module):
         self.predictor = self._build_mlp(num_states, predictor_hidden_dims, num_outputs, activation).to(self.device)
         self.target = self._build_mlp(num_states, target_hidden_dims, num_outputs, activation).to(self.device)
 
-        # make target network not trainable
-        self.target.eval()
-
-    def get_intrinsic_reward(self, rnd_state) -> tuple[torch.Tensor, torch.Tensor]:
+    def get_intrinsic_reward(self, gated_state) -> tuple[torch.Tensor, torch.Tensor]:
         # note: the counter is updated number of env steps per learning iteration
         self.update_counter += 1
-        # Normalize rnd state
-        rnd_state = self.state_normalizer(rnd_state)
-        # Obtain the embedding of the rnd state from the target and predictor networks
-        target_embedding = self.target(rnd_state).detach()
-        predictor_embedding = self.predictor(rnd_state).detach()
+        # Normalize gated state
+        gated_state = self.state_normalizer(gated_state)
+        # Obtain the embedding of the gated state from the target and predictor networks
+        target_embedding = self.target(gated_state).detach()
+        predictor_embedding = self.predictor(gated_state).detach()
         # Compute the intrinsic reward as the distance between the embeddings
         intrinsic_reward = torch.linalg.norm(target_embedding - predictor_embedding, dim=1)
         # Normalize intrinsic reward
@@ -124,13 +111,13 @@ class RandomNetworkDistillation(nn.Module):
 
         # Check the weight schedule
         if self.weight_scheduler is not None:
-            self.weight = self.weight_scheduler(step=self.update_counter, **self.weight_scheduler_params)
+            self.weight = self.weight_scheduler(self.update_counter, **self.weight_scheduler_params)
         else:
             self.weight = self.initial_weight
         # Scale intrinsic reward
         intrinsic_reward *= self.weight
 
-        return intrinsic_reward, rnd_state
+        return intrinsic_reward, gated_state
 
     def forward(self, *args, **kwargs):
         raise RuntimeError("Forward method is not implemented. Use get_intrinsic_reward instead.")
@@ -179,18 +166,8 @@ class RandomNetworkDistillation(nn.Module):
     Different weight schedules.
     """
 
-    def _constant_weight_schedule(self, step: int, **kwargs):
+    def _constant_weight_schedule(self, step, **kwargs):
         return self.initial_weight
 
-    def _step_weight_schedule(self, step: int, final_step: int, final_value: float, **kwargs):
-        return self.initial_weight if step < final_step else final_value
-
-    def _linear_weight_schedule(self, step: int, initial_step: int, final_step: int, final_value: float, **kwargs):
-        if step < initial_step:
-            return self.initial_weight
-        elif step > final_step:
-            return final_value
-        else:
-            return self.initial_weight + (final_value - self.initial_weight) * (step - initial_step) / (
-                final_step - initial_step
-            )
+    def _step_weight_schedule(self, step, max_num_steps: int, final_value: float, **kwargs):
+        return self.initial_weight if step < max_num_steps else final_value

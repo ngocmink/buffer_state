@@ -1,14 +1,15 @@
 # RSL RL
 
-A fast and simple implementation of RL algorithms, designed to run fully on GPU.
-This code is an evolution of `rl-pytorch` provided with NVIDIA's Isaac Gym.
+Fast and simple implementation of RL algorithms, designed to run fully on GPU.
+This code is an evolution of `rl-pytorch` provided with NVIDIA's Isaac GYM.
 
 Environment repositories using the framework:
 
 * **`Isaac Lab`** (built on top of NVIDIA Isaac Sim): https://github.com/isaac-sim/IsaacLab
 * **`Legged-Gym`** (built on top of NVIDIA Isaac Gym): https://leggedrobotics.github.io/legged_gym/
 
-The main branch supports **PPO** and **Student-Teacher Distillation** with additional features from our research. These include:
+The main branch supports PPO with additional features from our research.
+These include:
 
 * [Random Network Distillation (RND)](https://proceedings.mlr.press/v229/schwarke23a.html) - Encourages exploration by adding
   a curiosity driven intrinsic reward.

@@ -1,8 +1,6 @@
 algorithm:
   class_name: PPO
   # training parameters
-  # -- advantage normalization
-  normalize_advantage_per_mini_batch: false
   # -- value function
   value_loss_coef: 1.0
   clip_param: 0.2
@@ -23,12 +21,16 @@ algorithm:
   rnd_cfg:
       weight: 0.0  # initial weight of the RND reward
 
-      # note: This is a dictionary with a required key called "mode".
-      #   Please check the RND module for more information.
+      # note: This is a dictionary with a required key called "mode" which can be one of "constant" or "step".
+      #   - If "constant", then the weight is constant.
+      #   - If "step", then the weight is updated using the step scheduler. It takes additional parameters:
+      #     - max_num_steps: maximum number of steps to update the weight
+      #     - final_value: final value of the weight
+      # If None, then no scheduler is used.
       weight_schedule: null
 
       reward_normalization: false  # whether to normalize RND reward
-      state_normalization: true  # whether to normalize RND state observations
+      gate_normalization: true  # whether to normalize RND gate observations
 
       # -- Learning parameters
       learning_rate: 0.001  # learning rate for RND
@@ -51,7 +53,7 @@ algorithm:
     #
     #     @torch.no_grad()
     #     def get_symmetric_states(
-    #        obs: Optional[torch.Tensor] = None, actions: Optional[torch.Tensor] = None, cfg: "BaseEnvCfg" = None, obs_type: str = "policy"
+    #        obs: Optional[torch.Tensor] = None, actions: Optional[torch.Tensor] = None, cfg: "BaseEnvCfg" = None, is_critic: bool = False,
     #     ) -> Tuple[torch.Tensor, torch.Tensor]:
     #
     data_augmentation_func: null
@@ -67,11 +69,9 @@ policy:
   actor_hidden_dims: [128, 128, 128]
   critic_hidden_dims: [128, 128, 128]
   init_noise_std: 1.0
-  noise_std_type: "scalar"  # 'scalar' or 'log'
-
   # only needed for `ActorCriticRecurrent`
   # rnn_type: 'lstm'
-  # rnn_hidden_dim: 512
+  # rnn_hidden_size: 512
   # rnn_num_layers: 1
 
 runner:
@@ -87,6 +87,7 @@ runner:
     neptune_project: legged_gym
     wandb_project: legged_gym
     # -- load and resuming
+    resume: false
     load_run: -1  # -1 means load latest run
     resume_path: null  # updated from load_run and checkpoint
     checkpoint: -1  # -1 means load latest checkpoint
