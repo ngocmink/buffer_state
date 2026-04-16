@@ -150,6 +150,7 @@ class LeggedRobot(BaseTask):
 
     def set_external_initial_states(self, states):
         self.external_initial_states = states.float() # states: [pos, quat, lin_vel, ang_vel, dof_pos, dof_vel]
+        # print("External initial states set with shape: ", self.external_initial_states.shape)
 
     def reset_idx(self, env_ids):
         """ Reset some environments.
@@ -170,6 +171,8 @@ class LeggedRobot(BaseTask):
         if self.cfg.commands.curriculum and (self.common_step_counter % self.max_episode_length==0):
             self.update_command_curriculum(env_ids)
 
+        env_ids_int32 = env_ids.to(dtype=torch.int32)
+
         if hasattr(self, 'external_initial_states'):
             selected_states = self.external_initial_states[env_ids]   # [len(env_ids), state_dim]
 
@@ -184,30 +187,32 @@ class LeggedRobot(BaseTask):
                 self.root_states[env_ids, 2] = ground_height + selected_states[:, 2]
 
             # Cập nhật DOF states (góc khớp + vận tốc khớp)
-            self.dof_pos[env_ids] = selected_states[:, 13:13+self.num_dof]
-            self.dof_vel[env_ids] = selected_states[:, 13+self.num_dof:]
+            dof_state_view = self.dof_state.view(self.num_envs, self.num_dof, 2)
+            dof_state_view[env_ids, :, 0] = selected_states[:, 13:13+self.num_dof]
+            dof_state_view[env_ids, :, 1] = selected_states[:, 13+self.num_dof:]
+
+            self.gym.set_actor_root_state_tensor_indexed(self.sim,
+                                                     gymtorch.unwrap_tensor(self.root_states),
+                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+            self.gym.set_dof_state_tensor_indexed(self.sim,
+                                                        gymtorch.unwrap_tensor(self.dof_state),
+                                                        gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+
         else:
             # reset robot states
             self._reset_dofs(env_ids)
             self._reset_root_states(env_ids)
-        
-        env_ids_int32 = env_ids.to(dtype=torch.int32)
-        
-        self.gym.set_actor_root_state_tensor_indexed(self.sim,
-                                                     gymtorch.unwrap_tensor(self.root_states),
-                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
-        self.gym.set_dof_state_tensor_indexed(self.sim,
-                                                     gymtorch.unwrap_tensor(self.dof_state),
-                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
 
         self._resample_commands(env_ids)
 
         # reset buffers
         self.last_actions[env_ids] = 0.
         self.last_dof_vel[env_ids] = 0.
+        self.last_root_vel[env_ids] = 0.
         self.feet_air_time[env_ids] = 0.
         self.episode_length_buf[env_ids] = 0
         self.reset_buf[env_ids] = 1
+
         # fill extras
         self.extras["episode"] = {}
         for key in self.episode_sums.keys():
@@ -822,12 +827,17 @@ class LeggedRobot(BaseTask):
         Returns:
             [type]: [description]
         """
+        if env_ids is not None:
+            num_envs_batch = len(env_ids)
+        else:
+            num_envs_batch = self.num_envs
+    
         if self.cfg.terrain.mesh_type == 'plane':
             return torch.zeros(self.num_envs, self.num_height_points, device=self.device, requires_grad=False)
         elif self.cfg.terrain.mesh_type == 'none':
             raise NameError("Can't measure height with terrain mesh type 'none'")
 
-        if env_ids:
+        if env_ids is not None:                                                                                                 
             points = quat_apply_yaw(self.base_quat[env_ids].repeat(1, self.num_height_points), self.height_points[env_ids]) + (self.root_states[env_ids, :3]).unsqueeze(1)
         else:
             points = quat_apply_yaw(self.base_quat.repeat(1, self.num_height_points), self.height_points) + (self.root_states[:, :3]).unsqueeze(1)
@@ -845,7 +855,7 @@ class LeggedRobot(BaseTask):
         heights = torch.min(heights1, heights2)
         heights = torch.min(heights, heights3)
 
-        return heights.view(self.num_envs, -1) * self.terrain.cfg.vertical_scale
+        return heights.view(num_envs_batch, -1) * self.terrain.cfg.vertical_scale
 
     #------------ reward functions----------------
     def _reward_lin_vel_z(self):
