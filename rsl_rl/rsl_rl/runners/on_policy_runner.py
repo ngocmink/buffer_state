@@ -67,7 +67,7 @@ class OnPolicyRunner:
             advantage_gamma=self.alg_cfg.get("gamma", 0.99),
             gae_lambda=self.alg_cfg.get("gae_lambda", 0.95),
             sampling_strategy='network',
-            min_timesteps=8,
+            min_timesteps=16,
         )
         
         if self.env.num_privileged_obs is not None:
@@ -162,15 +162,13 @@ class OnPolicyRunner:
                     rollout_episode_starts=rollout_episode_starts,       # [steps, envs]
                     rollout_full_states=full_states_buffer.cpu().numpy()
                 )
-                with torch.no_grad():
-                    sample_obs = self.projection_buffer.get_train_sample_observs()
-                    values = self.alg.actor_critic.evaluate(sample_obs).cpu().numpy().flatten()
+                sample_obs = self.projection_buffer.get_train_sample_observs()
+                values = self.alg.actor_critic.evaluate(sample_obs).cpu().numpy().flatten()
                     
                 stop = time.time()
                 collection_time = stop - start
-
-                # Learning step
                 start = stop
+
             self.alg.compute_returns(critic_obs.clone())
             
             proj_loss = self.projection_buffer.train_step(values)
