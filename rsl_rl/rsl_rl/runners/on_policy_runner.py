@@ -188,6 +188,7 @@ class OnPolicyRunner:
                 # selected_indices // timestep , selected_indices % timestep
 
                 if hasattr(self.env, "set_external_initial_states"):
+                    print("OK")
                     self.env.set_external_initial_states(torch.tensor(spawn_states).to(self.device))
                     
             stop = time.time()

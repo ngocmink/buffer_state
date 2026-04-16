@@ -178,13 +178,14 @@ class LeggedRobot(BaseTask):
 
             # Cập nhật root states (vị trí + hướng)
             self.root_states[env_ids] = selected_states[:, :13]     # pos(3) + quat(4) + lin_vel(3) + ang_vel(3)
-
             self.root_states[env_ids, :2] += self.env_origins[env_ids, :2]
 
             if self.cfg.terrain.measure_heights:
                 heights = self._get_heights(env_ids)
                 ground_height = torch.mean(heights, dim=1)
                 self.root_states[env_ids, 2] = ground_height + selected_states[:, 2]
+            else:
+                self.root_states[env_ids, 2] += self.env_origins[env_ids, 2] 
 
             # Cập nhật DOF states (góc khớp + vận tốc khớp)
             dof_state_view = self.dof_state.view(self.num_envs, self.num_dof, 2)
