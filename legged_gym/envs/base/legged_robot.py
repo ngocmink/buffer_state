@@ -129,10 +129,10 @@ class LeggedRobot(BaseTask):
         self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
 
         self.extras["full_states"] = torch.cat([
-            self.root_states[:, :13],          # pos(3) + quat(4) + lin_vel(3) + ang_vel(3)
-            self.dof_pos,                       # [num_envs, num_dof]
-            self.dof_vel,                       # [num_envs, num_dof]
-        ], dim=-1)   
+            self.root_states[:, :13],   # quat + lin_vel + ang_vel
+            self.dof_pos,
+            self.dof_vel,
+        ], dim=-1)  
         
         self.last_actions[:] = self.actions[:]
         self.last_dof_vel[:] = self.dof_vel[:]
@@ -177,15 +177,19 @@ class LeggedRobot(BaseTask):
             selected_states = self.external_initial_states[env_ids]   # [len(env_ids), state_dim]
 
             # Cập nhật root states (vị trí + hướng)
-            self.root_states[env_ids] = selected_states[:, :13]     # pos(3) + quat(4) + lin_vel(3) + ang_vel(3)
-            self.root_states[env_ids, :2] += self.env_origins[env_ids, :2]
+            self.root_states[env_ids, :2] = selected_states[:, :2]    # pos(3) + quat(4) + lin_vel(3) + ang_vel(3)
+            self.root_states[env_ids, 3:13] = selected_states[:, 3:13]
 
             if self.cfg.terrain.measure_heights:
-                heights = self._get_heights(env_ids)
-                ground_height = torch.mean(heights, dim=1)
-                self.root_states[env_ids, 2] = ground_height + selected_states[:, 2]
+                # heights = self._get_heights(env_ids)
+                
+                # ground_height = torch.mean(heights, dim=1)
+                # self.root_states[env_ids, 2] = ground_height + selected_states[:, 2]
+                
+                # ground_height = heights[:, 187 // 2] 
+                self.root_states[env_ids, 2] = selected_states[:, 2]
             else:
-                self.root_states[env_ids, 2] += self.env_origins[env_ids, 2] 
+                self.root_states[env_ids, 2] = selected_states[:, 2] 
 
             # Cập nhật DOF states (góc khớp + vận tốc khớp)
             dof_state_view = self.dof_state.view(self.num_envs, self.num_dof, 2)
