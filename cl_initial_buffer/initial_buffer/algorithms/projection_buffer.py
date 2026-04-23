@@ -144,14 +144,13 @@ class ProjectionBuffer:
         if self.prev_improvement is None:
             self.prev_improvement = np.zeros_like(improvement_begin_to_step)
 
-        # Change calculation
-        gradient_improvement = improvement_begin_to_step - self.prev_improvement
+        # Change calculation (stored for reference but NOT used for mining - paper mines on ΔV directly)
         self.prev_improvement = improvement_begin_to_step
         
         ###**************************###
-
-        pos_ids = np.argpartition(gradient_improvement, -self.nr_mining_samples)[-self.nr_mining_samples:]
-        neg_ids = np.argpartition(gradient_improvement, self.nr_mining_samples)[:self.nr_mining_samples]
+        # Mine pos/neg based on absolute ΔV(s), as described in the paper (Section III-B)
+        pos_ids = np.argpartition(improvement_begin_to_step, -self.nr_mining_samples)[-self.nr_mining_samples:]
+        neg_ids = np.argpartition(improvement_begin_to_step, self.nr_mining_samples)[:self.nr_mining_samples]
 
         ###**************************###
 
@@ -217,7 +216,9 @@ class ProjectionBuffer:
                                                                  nr_clusters=self.nr_clusters,
                                                                  cluster_algo=self.cluster_algo)
         k = buffer_length // self.nr_clusters
-        k_smallest_distances_idx = np.argpartition(-cluster_distances, -k, axis=0)[-k:]
+        # Paper: select k states CLOSEST to each cluster centroid (smallest distance)
+        # Bug fix: removed the '-' sign that was selecting k-FARTHEST states instead
+        k_smallest_distances_idx = np.argpartition(cluster_distances, k, axis=0)[:k]
         k_smallest_distances = np.take_along_axis(cluster_distances, k_smallest_distances_idx, axis=0)
         sorted_idx = np.argsort(k_smallest_distances, axis=0)
         k_smallest_ordered_idx = np.take_along_axis(k_smallest_distances_idx, sorted_idx, axis=0)
