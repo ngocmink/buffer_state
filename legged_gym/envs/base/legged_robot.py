@@ -189,7 +189,7 @@ class LeggedRobot(BaseTask):
                 # ground_height = heights[:, 187 // 2] 
                 self.root_states[env_ids, 2] = selected_states[:, 2]
             else:
-                self.root_states[env_ids, 2] = selected_states[:, 2] 
+                self.root_states[env_ids, 2] = selected_states[:, 2]
 
             # Cập nhật DOF states (góc khớp + vận tốc khớp)
             dof_state_view = self.dof_state.view(self.num_envs, self.num_dof, 2)
