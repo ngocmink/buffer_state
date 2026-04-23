@@ -128,14 +128,37 @@ class OnPolicyRunner:
 
             # Rollout
             with torch.inference_mode():
+                # Bug fix (Bug 5): Track cumulative episode reward for performance filtering
+                # Paper: exclude states with accumulated reward < 0 from the buffer
+                cum_episode_reward = torch.zeros(self.env.num_envs, device=self.device)
+
+                # Bug fix (Bug 2): Pre-fetch states BEFORE env.step() to align with current obs.
+                # storage.observations[step] stores o_t (before step), so full_states must also be s_t.
+                # We access infos["full_states"] from the previous step's result OR we get the pre-step
+                # state from the env directly before stepping.
+                prev_full_states = self.env.extras.get("full_states", None)
+
                 for step in range(self.num_steps_per_env):
                     actions = self.alg.act(obs, critic_obs)
+
+                    # Record s_t (state at the time of o_t, BEFORE env.step)
+                    # This is the full_states from the PREVIOUS timestep's post_physics_step
+                    # (which is now recorded before reset, thanks to Bug 3 fix)
+                    if prev_full_states is not None:
+                        full_states_buffer[step] = prev_full_states.to(self.device)
+
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions)
                     critic_obs = privileged_obs if privileged_obs is not None else obs
                     obs, critic_obs, rewards, dones = obs.to(self.device), critic_obs.to(self.device), rewards.to(self.device), dones.to(self.device)
 
+                    # Save current full_states as prev for next step
                     if "full_states" in infos:
-                        full_states_buffer[step] = infos["full_states"].to(self.device)
+                        prev_full_states = infos["full_states"].clone().to(self.device)
+
+                    # Bug fix (Bug 5): accumulate rewards; mask out envs that just reset
+                    cum_episode_reward += rewards
+                    # Reset cumulative counter for done envs
+                    cum_episode_reward[dones > 0] = 0.
 
                     self.alg.process_env_step(rewards, dones, infos)
                     
@@ -150,10 +173,10 @@ class OnPolicyRunner:
                         lenbuffer.extend(cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
                         cur_reward_sum[new_ids] = 0
                         cur_episode_length[new_ids] = 0
-                
-                # Projection Buffer
-                storage = self.alg.storage
 
+                # Bug fix: Pass data to projection buffer
+                # Re-access storage reference after rollout is complete
+                storage = self.alg.storage
                 rollout_rewards = storage.rewards.cpu().numpy().squeeze(-1)
                 rollout_episode_starts = storage.dones.cpu().numpy().squeeze(-1)
                 self.projection_buffer.create_train_data(

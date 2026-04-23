@@ -124,16 +124,20 @@ class LeggedRobot(BaseTask):
         # compute observations, rewards, resets, ...
         self.check_termination()
         self.compute_reward()
+
+        # Bug fix: record full_states BEFORE reset_idx so that terminal (pre-reset) states
+        # are captured in the buffer, not the default post-reset states.
+        # Paper requirement: s_t must be the actual state, not the state after re-initialization.
+        self.extras["full_states"] = torch.cat([
+            self.root_states[:, :13],   # pos(3) + quat(4) + lin_vel(3) + ang_vel(3)
+            self.dof_pos,
+            self.dof_vel,
+        ], dim=-1)
+
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         self.reset_idx(env_ids)
         self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
 
-        self.extras["full_states"] = torch.cat([
-            self.root_states[:, :13],   # quat + lin_vel + ang_vel
-            self.dof_pos,
-            self.dof_vel,
-        ], dim=-1)  
-        
         self.last_actions[:] = self.actions[:]
         self.last_dof_vel[:] = self.dof_vel[:]
         self.last_root_vel[:] = self.root_states[:, 7:13]
@@ -174,39 +178,45 @@ class LeggedRobot(BaseTask):
         env_ids_int32 = env_ids.to(dtype=torch.int32)
 
         if hasattr(self, 'external_initial_states'):
-            selected_states = self.external_initial_states[env_ids]   # [len(env_ids), state_dim]
+            # Bug fix (Bug 5): Probabilistic reset per paper (Section III-C).
+            # Use ISB states with p=0.8; remaining 20% use default random initialization.
+            p_isb = 0.8
+            rand_vals = torch.rand(len(env_ids), device=self.device)
+            isb_mask = rand_vals < p_isb          # True → use ISB state
+            isb_env_ids = env_ids[isb_mask]
+            default_env_ids = env_ids[~isb_mask]
 
-            # Cập nhật root states (vị trí + hướng)
-            self.root_states[env_ids, :2] = selected_states[:, :2]    # pos(3) + quat(4) + lin_vel(3) + ang_vel(3)
-            self.root_states[env_ids, 3:13] = selected_states[:, 3:13]
+            # Reset ISB-selected envs from the contrastive buffer
+            if len(isb_env_ids) > 0:
+                selected_states = self.external_initial_states[isb_env_ids]   # [len(isb_env_ids), state_dim]
 
-            if self.cfg.terrain.measure_heights:
-                # heights = self._get_heights(env_ids)
-                
-                # ground_height = torch.mean(heights, dim=1)
-                # self.root_states[env_ids, 2] = ground_height + selected_states[:, 2]
-                
-                # ground_height = heights[:, 187 // 2] 
-                self.root_states[env_ids, 2] = selected_states[:, 2]
-            else:
-                self.root_states[env_ids, 2] = selected_states[:, 2]
+                # Cập nhật root states (vị trí + hướng)
+                self.root_states[isb_env_ids, :2] = selected_states[:, :2]    # pos(3) + quat(4) + lin_vel(3) + ang_vel(3)
+                self.root_states[isb_env_ids, 3:13] = selected_states[:, 3:13]
 
-            # Cập nhật DOF states (góc khớp + vận tốc khớp)
-            dof_state_view = self.dof_state.view(self.num_envs, self.num_dof, 2)
-            dof_state_view[env_ids, :, 0] = selected_states[:, 13:13+self.num_dof]
-            dof_state_view[env_ids, :, 1] = selected_states[:, 13+self.num_dof:]
+                if self.cfg.terrain.measure_heights:
+                    self.root_states[isb_env_ids, 2] = selected_states[:, 2]
+                else:
+                    self.root_states[isb_env_ids, 2] = selected_states[:, 2]
 
-            self.gym.set_actor_root_state_tensor_indexed(self.sim,
-                                                     gymtorch.unwrap_tensor(self.root_states),
-                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
-            self.gym.set_dof_state_tensor_indexed(self.sim,
-                                                        gymtorch.unwrap_tensor(self.dof_state),
-                                                        gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+                # Cập nhật DOF states (góc khớp + vận tốc khớp)
+                dof_state_view = self.dof_state.view(self.num_envs, self.num_dof, 2)
+                dof_state_view[isb_env_ids, :, 0] = selected_states[:, 13:13+self.num_dof]
+                dof_state_view[isb_env_ids, :, 1] = selected_states[:, 13+self.num_dof:]
 
-        else:
-            # reset robot states
-            self._reset_dofs(env_ids)
-            self._reset_root_states(env_ids)
+                isb_env_ids_int32 = isb_env_ids.to(dtype=torch.int32)
+                self.gym.set_actor_root_state_tensor_indexed(self.sim,
+                                                         gymtorch.unwrap_tensor(self.root_states),
+                                                         gymtorch.unwrap_tensor(isb_env_ids_int32), len(isb_env_ids_int32))
+                self.gym.set_dof_state_tensor_indexed(self.sim,
+                                                            gymtorch.unwrap_tensor(self.dof_state),
+                                                            gymtorch.unwrap_tensor(isb_env_ids_int32), len(isb_env_ids_int32))
+
+            # Reset remaining 20% using standard random initialization
+            if len(default_env_ids) > 0:
+                self._reset_dofs(default_env_ids)
+                self._reset_root_states(default_env_ids)
+
 
         self._resample_commands(env_ids)
 
