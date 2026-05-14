@@ -125,19 +125,17 @@ class LeggedRobot(BaseTask):
         self.check_termination()
         self.compute_reward()
 
-        # Bug fix: record full_states BEFORE reset_idx so that terminal (pre-reset) states
-        # are captured in the buffer, not the default post-reset states.
-        # Paper requirement: s_t must be the actual state, not the state after re-initialization.
+        # store full states
         self.extras["full_states"] = torch.cat([
-            self.root_states[:, :13],   # pos(3) + quat(4) + lin_vel(3) + ang_vel(3)
+            self.root_states[:, :13],   # quat + lin_vel + ang_vel
             self.dof_pos,
             self.dof_vel,
-        ], dim=-1)
+        ], dim=-1) 
 
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         self.reset_idx(env_ids)
-        self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
-
+        self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions) 
+        
         self.last_actions[:] = self.actions[:]
         self.last_dof_vel[:] = self.dof_vel[:]
         self.last_root_vel[:] = self.root_states[:, 7:13]
@@ -152,9 +150,9 @@ class LeggedRobot(BaseTask):
         self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
         self.reset_buf |= self.time_out_buf
 
-    def set_external_initial_states(self, states):
-        self.external_initial_states = states.float() # states: [pos, quat, lin_vel, ang_vel, dof_pos, dof_vel]
-        # print("External initial states set with shape: ", self.external_initial_states.shape)
+    # def set_external_initial_states(self, states):
+    #     self.external_initial_states = states.float() # states: [pos, quat, lin_vel, ang_vel, dof_pos, dof_vel]
+    #     # print("External initial states set with shape: ", self.external_initial_states.shape)
 
     def reset_idx(self, env_ids):
         """ Reset some environments.
@@ -175,11 +173,7 @@ class LeggedRobot(BaseTask):
         if self.cfg.commands.curriculum and (self.common_step_counter % self.max_episode_length==0):
             self.update_command_curriculum(env_ids)
 
-        env_ids_int32 = env_ids.to(dtype=torch.int32)
-
         if hasattr(self, 'external_initial_states'):
-            # Bug fix (Bug 5): Probabilistic reset per paper (Section III-C).
-            # Use ISB states with p=0.8; remaining 20% use default random initialization.
             p_isb = 0.8
             rand_vals = torch.rand(len(env_ids), device=self.device)
             isb_mask = rand_vals < p_isb          # True → use ISB state
@@ -216,7 +210,6 @@ class LeggedRobot(BaseTask):
             if len(default_env_ids) > 0:
                 self._reset_dofs(default_env_ids)
                 self._reset_root_states(default_env_ids)
-
 
         self._resample_commands(env_ids)
 
